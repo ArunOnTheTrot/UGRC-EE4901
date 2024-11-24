@@ -1,0 +1,37 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+
+x_data = np.linspace(0, 20, 2000)
+y_data = np.array(dx_du)  
+
+
+def model(x, a, b, c, d):
+    base = np.maximum(x - d, 1e-8) 
+    return a * base**b + c
+
+initial_guess = [1.0, 1.0, 0.0, 1.0]
+
+try:
+    params, params_covariance = curve_fit(
+        model, x_data, y_data, p0=initial_guess, maxfev=50000
+    )
+except RuntimeError as e:
+    print(f"Curve fit failed: {e}")
+    params = initial_guess  # Use the initial guess as a fallback
+
+fitted_curve = model(x_data, *params)
+
+plt.figure(figsize=(12, 4))
+plt.scatter(x_data, y_data, label="Data", color="blue", s=1)
+plt.plot(x_data, fitted_curve, label="Fitted Function", color="red", linewidth=2)
+plt.legend()
+plt.title("Data Fitting with Corrected Model")
+plt.xlabel("x")
+plt.ylabel("y")
+plt.grid()
+plt.tight_layout()
+plt.show()
+
+# Display the fitted parameters
+print("Fitted Parameters:", params)
