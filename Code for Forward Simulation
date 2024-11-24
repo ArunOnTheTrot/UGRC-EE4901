@@ -1,0 +1,104 @@
+import casadi as ca
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Interpretations - Lower the k (co-efficient of x) closer the final output to target. Higher m (co-efficient of double-derivative of x) is resposible for slower attenutation of x.  
+m, n, k = 1000.0, 0.5, 1.00  
+t_end = 20               
+dt = 0.01                
+
+x = ca.MX.sym("x")      
+v = ca.MX.sym("v")       
+states = ca.vertcat(x, v)  # State vector
+u = ca.MX.sym("u")       # Control input
+
+# Approach we are gonna use: Similar to pole placement, where you use u = -Kx, where x is the state vector [x v]^T, and hence K = [Kp Kd].
+# Apart from that, you have state equation as dx/dt = Ax+Bu as well.
+x_dot = v
+v_dot = (u - n * v - k * x) / m
+dynamics = ca.vertcat(x_dot, v_dot)
+target = 10
+K_p = ca.MX.sym("K_p")
+K_d = ca.MX.sym("K_d")
+u_control = -K_p * (x - target) - K_d * v  #[Kp Kd][x v]^T, where we want x to converge towards target 10
+
+
+dynamics_controlled = ca.substitute(dynamics, u, u_control)
+ode = ca.Function("ode", [states, K_p, K_d], [dynamics_controlled])
+
+N = int(t_end / dt)
+cost = 0
+state = ca.MX([10.0, 0.0])  # Initial conditions
+for i in range(N):
+    error = state[0] - target  # Position error
+    cost += error**2 * dt  # Squared error integrated over time
+    state_dot = ode(state, K_p, K_d)
+    state = state + dt * state_dot
+
+nlp = {"x": ca.vertcat(K_p, K_d), "f": cost}
+solver = ca.nlpsol("solver", "ipopt", nlp)
+res = solver(x0=[20, 0], lbx=[0, 0], ubx=[1000, 1000])  # Initial guess and bounds
+K_p_opt, K_d_opt = res["x"].full().flatten()
+
+print("Optimized K_p:", K_p_opt, "Optimized K_d:", K_d_opt)
+
+
+time = np.arange(0, t_end, dt)
+x_vals, v_vals, u_vals = [], [], []
+state = np.array([20.0, 0.0])  # Initial position and velocity
+
+# Numerical integration using Euler's method
+for t_step in time:
+    x_vals.append(state[0])  # Save position x(t)
+    v_vals.append(state[1])  # Save velocity v(t)
+    u_val = -K_p_opt * (state[0] - 5) - K_d_opt * state[1]
+    u_vals.append(u_val)
+    state_dot = ode(state, K_p_opt, K_d_opt)
+    state = state + dt * np.array(state_dot.full().flatten())
+
+plt.figure(figsize=(12, 6))
+plt.subplot(2, 1, 1)
+plt.plot(time, x_vals, label="x(t)", color="blue")
+plt.axhline(10, color="red", linestyle="--", label="Target = 10")
+plt.title("Position x(t) Approaching Target")
+plt.xlabel("Time (s)")
+plt.ylabel("Position x(t)")
+plt.legend()
+plt.grid()
+plt.subplot(2, 1, 2)
+plt.plot(time, u_vals, label="u(t)", color="green")
+plt.title("Control Input u(t)")
+plt.xlabel("Time (s)")
+plt.ylabel("Control Force u(t)")
+plt.legend()
+plt.grid()
+plt.tight_layout()
+plt.show()
+
+#Once we do this, we have to find the u(t) We can do that my optimizing a model fit. We assume model to be an attenuated amplifed phase shifted sinusoid.
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+
+x_data = np.linspace(0, 20, 2000)  # Simulated time values
+y_data = np.array(u_vals)          # Replace x_vals with the actual data
+
+def model(x, a, b, c, d, x0):
+    return d * np.sin(b * x + c) * np.exp(-a * x) + x0
+
+initial_guess = [0.1, 1.0, 0.0, 1.0, 5.0]
+params, _ = curve_fit(model, x_data, y_data, p0=initial_guess, maxfev=100000)
+
+plt.figure(figsize=(12, 3))
+plt.scatter(x_data, y_data, label="Data", color="blue", s=1)
+plt.plot(x_data, model(x_data, *params), label="Fitted Function", color="red")
+plt.legend()
+plt.title("Data Fitting with Sinusoidal Decay Model")
+plt.xlabel("Time (s)")
+plt.ylabel("Position x(t)")
+plt.grid()
+plt.tight_layout()
+plt.show()
+
+print("Fitted Parameters:", params)
