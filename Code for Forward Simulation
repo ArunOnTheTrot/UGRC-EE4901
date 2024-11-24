@@ -76,27 +76,36 @@ plt.tight_layout()
 plt.show()
 
 #Once we do this, we have to find the u(t) We can do that my optimizing a model fit. We assume model to be an attenuated amplifed phase shifted sinusoid.
-
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-x_data = np.linspace(0, 20, 2000)  # Simulated time values
-y_data = np.array(u_vals)          # Replace x_vals with the actual data
+# Generate example data
+x_data = np.linspace(0, 20, 2000)
+y_data = np.array(u_vals)
 
+# Define the model function
 def model(x, a, b, c, d, x0):
-    return d * np.sin(b * x + c) * np.exp(-a * x) + x0
+    return a * np.sin(b * x + c) * np.exp(-d * x) + x0
 
-initial_guess = [0.1, 1.0, 0.0, 1.0, 5.0]
-params, _ = curve_fit(model, x_data, y_data, p0=initial_guess, maxfev=100000)
+# Initial guesses for parameters
+initial_guess = [0.5, 2 * np.pi, 0.0, 0.1, 0.5]
 
+# Fit the model to the data
+try:
+    params, params_covariance = curve_fit(model, x_data, y_data, p0=initial_guess, maxfev=10000)
+except RuntimeError as e:
+    print(f"Curve fit failed: {e}")
+    params = initial_guess  # Use the initial guess as a fallback
+
+# Plot the data and the fitted function
 plt.figure(figsize=(12, 3))
 plt.scatter(x_data, y_data, label="Data", color="blue", s=1)
 plt.plot(x_data, model(x_data, *params), label="Fitted Function", color="red")
 plt.legend()
 plt.title("Data Fitting with Sinusoidal Decay Model")
 plt.xlabel("Time (s)")
-plt.ylabel("Position x(t)")
+plt.ylabel("Force x(t)")
 plt.grid()
 plt.tight_layout()
 plt.show()
