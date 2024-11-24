@@ -1,0 +1,143 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import jax
+import jax.numpy as jnp
+import jax.random as jrandom
+import networkx as nx
+import random
+from matplotlib.animation import FuncAnimation, PillowWriter
+from google.colab import files
+
+n = 1000
+m = 2
+p = 0
+min_components_per_net = 2
+max_components_per_net = 6
+dt = 0.03 
+max_iterations = 200 
+
+key = jrandom.PRNGKey(42)
+points = jrandom.uniform(key, (n, 2), minval=-1.0, maxval=1.0)  
+
+def generate_graph(points, n, m, p):
+    G = nx.Graph()
+    G.add_nodes_from(range(n))
+    distances = jnp.sqrt(jnp.sum((points[:, None, :] - points[None, :, :])**2, axis=-1))
+
+    for new_node in range(m, n):
+        potential_edges = []
+        for existing_node in range(new_node):
+            weight = 1 / (distances[new_node, existing_node] + 1e-9)
+            potential_edges.append((weight, existing_node))
+        potential_edges.sort(reverse=True)
+
+        selected_edges = [edge[1] for edge in potential_edges[:m]]
+        G.add_edges_from([(new_node, sel) for sel in selected_edges if new_node != sel])
+
+        for sel in selected_edges:
+            neighbors = list(G.neighbors(sel))
+            if neighbors and np.random.random() < p:
+                closest_neighbor = min(neighbors, key=lambda x: distances[new_node, x])
+                if closest_neighbor != new_node:
+                    G.add_edge(new_node, closest_neighbor)
+
+    return G, distances
+
+def enforce_component_constraint(G, distances, min_components, max_components):
+    nets = list(nx.connected_components(G))
+    for net in nets:
+        while len(net) < min_components:
+            node = random.choice(list(net))
+            non_neighbors = [n for n in G.nodes if n not in net and n != node]
+            if non_neighbors:
+                new_neighbor = random.choice(non_neighbors)
+                G.add_edge(node, new_neighbor)
+                net = max(nx.connected_components(G), key=len)
+        while len(net) > max_components:
+            node = random.choice(list(net))
+            neighbors = list(G.neighbors(node))
+            if neighbors:
+                farthest_neighbor = max(neighbors, key=lambda x: distances[node, x])
+                G.remove_edge(node, farthest_neighbor)
+            net = max(nx.connected_components(G), key=len)
+    return G
+
+def connect_isolated_points(G, distances):
+    isolated_nodes = list(nx.isolates(G))
+    while isolated_nodes:
+        for node in isolated_nodes:
+            non_isolated_nodes = [n for n in G.nodes if n not in isolated_nodes]
+            if non_isolated_nodes:
+                closest_node = min(non_isolated_nodes, key=lambda x: distances[node, x])
+                G.add_edge(node, closest_node)
+        isolated_nodes = list(nx.isolates(G))
+    return G
+
+def generate_and_enforce_graph(points, n, m, p, min_components, max_components):
+    while True:
+        G, distances = generate_graph(points, n, m, p)
+        G = enforce_component_constraint(G, distances, min_components, max_components)
+        G.remove_edges_from(nx.selfloop_edges(G))
+        G = connect_isolated_points(G, distances)
+        if not list(nx.isolates(G)):
+            break
+    return G
+
+G = generate_and_enforce_graph(points, n, m, p, min_components_per_net, max_components_per_net)
+
+B = jrandom.normal(key, (2, 2))  
+A = B.T @ B  
+
+def loss_function(points, G, A):
+    edges = list(G.edges)
+    diffs = jnp.array([points[j] - points[i] for i, j in edges]) 
+    lengths = jnp.sqrt(jnp.sum(diffs**2, axis=-1))
+    energy = jnp.sum((lengths)) 
+    return energy
+
+def mahalanobis_gradient(gradients, A):
+    cov_matrix = jnp.cov(gradients.T)
+    inv_cov_matrix = jnp.linalg.inv(cov_matrix + jnp.eye(cov_matrix.shape[0]) * 1e-2)
+    mahalanobis_grad = jnp.einsum('ij,kj->ki', inv_cov_matrix, gradients)
+    return mahalanobis_grad
+
+def simulate_mahalanobis_gradient_descent(G, initial_points, A, dt, max_iterations, damping_coefficient=0.1, convergence_threshold=1e-4, save_as=None):
+    points = initial_points.copy()
+    velocities = jnp.zeros_like(points)
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    loss_grad = jax.grad(loss_function, argnums=0)
+
+    def update(frame):
+        nonlocal points, velocities
+        gradients = loss_grad(points, G, A)
+        mah_gradients = mahalanobis_gradient(gradients, A)
+        velocities = velocities * (1 - damping_coefficient) - dt * mah_gradients
+        points += velocities * dt
+        if jnp.all(jnp.linalg.norm(velocities, axis=1) < convergence_threshold):
+            print(f"Convergence reached at iteration {frame + 1}")
+            ani.event_source.stop()
+            return 
+        ax.clear() 
+        pos_updated = {i: points[i].tolist() for i in G.nodes}
+        nx.draw_networkx_nodes(G, pos_updated, node_color='blue', node_size=30, ax=ax)
+        nx.draw_networkx_edges(G, pos_updated, edge_color='gray', alpha=0.6, ax=ax)
+
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
+        ax.set_title(f"Iteration {frame + 1}")
+
+        if frame % 100 == 0:
+            print(f"Iteration {frame + 1}")
+
+    ani = FuncAnimation(fig, update, frames=max_iterations, repeat=False)
+
+    if save_as == 'mp4':
+        ani.save('graph_animation.mp4', writer='ffmpeg', fps=30)
+    elif save_as == 'gif':
+        ani.save('graph_animation.gif', writer=PillowWriter(fps=30))
+    else:
+        plt.show()
+
+simulate_mahalanobis_gradient_descent(G, points, A, dt, max_iterations, damping_coefficient=0.09, save_as='mp4')
+files.download('graph_animation.mp4')
